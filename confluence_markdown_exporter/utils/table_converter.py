@@ -54,12 +54,21 @@ def make_empty_cell() -> Tag:
 
 
 def _normalize_table_cell_text(text: str) -> str:
-    return (
+    original_text = text
+    res = (
         text.replace("|", "\\|")  # Escape pipe characters to prevent breaking table formatting
         .replace("\n", "<br/>")  # Replace newlines with <br/> to preserve line breaks in tables
+        .strip()
         .removesuffix("<br/>")  # Remove trailing <br/> that may be added by the last cell in a row
         .removeprefix("<br/>")  # Remove leading <br/> that may be added by the first cell in a row
+        .strip()
     )
+    if "**[ZYTGXT" in res:
+        print("====== DEBUG NORMALIZE ======")
+        print("Original:", repr(original_text))
+        print("Result:", repr(res))
+        print("=============================")
+    return res
 
 
 class TableConverter(MarkdownConverter):
@@ -68,21 +77,86 @@ class TableConverter(MarkdownConverter):
     def convert_table(self, el: BeautifulSoup, text: str, parent_tags: list[str]) -> str:
         rows = [
             cast("list[Tag]", tr.find_all(["td", "th"]))
-            for tr in cast("list[Tag]", el.find_all("tr"))
+            for tr in cast("list[Tag]", el.find_all("tr", recursive=False)) # Only immediate children rows!
             if tr
         ]
+        
+        # If `recursive=False` broke anything, we'll restore but right now let's just do base find
+        if not rows:
+            # Fallback for tables where tbody is intermediate
+            tbodies = el.find_all("tbody", recursive=False)
+            if tbodies:
+                rows = [
+                    cast("list[Tag]", tr.find_all(["td", "th"]))
+                    for tr in cast("list[Tag]", tbodies[0].find_all("tr", recursive=False))
+                    if tr
+                ]
 
         if not rows:
             return ""
 
         padded_rows = pad(rows)
-        converted = [[self.convert(str(cell)) for cell in row] for row in padded_rows]
+        converted = []
+        for r, row in enumerate(padded_rows):
+            conv_row = []
+            for c, cell in enumerate(row):
+                cell_str = str(cell)
+                if "ZYTGXT" in cell_str:
+                    print(f"====== DEBUG STR(CELL) r={r} c={c} ======")
+                    print(repr(cell_str))
+                    print("=========================================")
+                conv_row.append(self.convert(cell_str))
+            converted.append(conv_row)
 
         has_header = all(cell.name == "th" for cell in rows[0])
-        if has_header:
-            return tabulate(converted[1:], headers=converted[0], tablefmt="pipe")
+        headers = converted[0] if has_header else [""] * len(converted[0])
+        body_rows = converted[1:] if has_header else converted
 
-        return tabulate(converted, headers=[""] * len(converted[0]), tablefmt="pipe")
+        if "td" in parent_tags or "th" in parent_tags:
+            lines = []
+            for row in body_rows:
+                props = []
+                for i, (h, c) in enumerate(zip(headers, row)):
+                    c_clean = " ".join(c.replace("\n", " ").replace("<br/>", " ").split())
+                    if not c_clean:
+                        continue
+                    h_clean = " ".join(h.replace("\n", " ").replace("<br/>", " ").split())
+                    
+                    if h_clean:
+                        if i == 0:
+                            props.append(f"**{c_clean}**")
+                        else:
+                            props.append(f"{h_clean}: {c_clean}")
+                    else:
+                        if i == 0:
+                            props.append(f"**{c_clean}**")
+                        else:
+                            props.append(c_clean)
+
+                if props:
+                    lines.append("- " + "    ".join(props))
+
+            res = "<br/>" + "<br/>".join(lines) + "<br/>"
+            if "**[ZYTGXT" in res:
+                print("====== DEBUG INNER TABLE RESULT ======")
+                print(repr(res))
+                print("======================================")
+            return res
+
+        # Construct markdown table without padding. This prevents massive git diffs and 
+        # large file sizes when a column contains very long content (like nested HTML tables),
+        # as tabulate would otherwise pad all cells in that column to match the maximum width.
+        lines = []
+        lines.append("| " + " | ".join(headers) + " |")
+        lines.append("|" + "|".join(["---"] * len(headers)) + "|")
+        for row in body_rows:
+            if any("**[ZYTGXT" in cell for cell in row):
+                print("====== DEBUG OUTER ROW ======")
+                print("row:", row)
+                print("============================")
+            lines.append("| " + " | ".join(row) + " |")
+
+        return "\n" + "\n".join(lines) + "\n"
 
     def convert_th(self, el: BeautifulSoup, text: str, parent_tags: list[str]) -> str:
         """This method is empty because we want a No-Op for the <th> tag."""
@@ -105,13 +179,9 @@ class TableConverter(MarkdownConverter):
         return text
 
     def convert_ol(self, el: BeautifulSoup, text: str, parent_tags: list[str]) -> str:
-        if "td" in parent_tags:
-            return str(el)
         return super().convert_ol(el, text, parent_tags)
 
     def convert_ul(self, el: BeautifulSoup, text: str, parent_tags: list[str]) -> str:
-        if "td" in parent_tags:
-            return str(el)
         return super().convert_ul(el, text, parent_tags)
 
     def convert_p(self, el: BeautifulSoup, text: str, parent_tags: list[str]) -> str:

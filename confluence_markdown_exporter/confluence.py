@@ -716,6 +716,22 @@ class Page(Document):
             super().__init__(**options)
             self.page = page
             self.page_properties = {}
+            self._jira_table_cursor = 0
+            
+            # Map Jira macros in view to their export_view tables by ID
+            self._jira_table_map = {}
+            if getattr(self.page, "body_export", None) and getattr(self.page, "body", None):
+                soup_view = BeautifulSoup(self.page.body, "html.parser")
+                view_macros = soup_view.find_all("div", {"data-macro-name": "jira"})
+                
+                soup_export = BeautifulSoup(self.page.body_export, "html.parser")
+                export_tables = soup_export.find_all("div", {"class": "jira-table"})
+                
+                for i, view_macro in enumerate(view_macros):
+                    if i < len(export_tables):
+                        macro_id = view_macro.get("id")
+                        if macro_id:
+                            self._jira_table_map[macro_id] = export_tables[i]
 
         @property
         def markdown(self) -> str:
@@ -898,9 +914,32 @@ class Page(Document):
             return self.convert_table(BeautifulSoup(html, "html.parser"), text, parent_tags)
 
         def convert_jira_table(self, el: BeautifulSoup, text: str, parent_tags: list[str]) -> str:
-            jira_tables = BeautifulSoup(self.page.body_export, "html.parser").find_all(
-                "div", {"class": "jira-table"}
-            )
+            # Prefer the table within the current macro element when available.
+            jira_table = el.find("div", {"class": "jira-table"})
+            if jira_table:
+                return self.process_tag(jira_table, parent_tags)
+
+            # Try to grab by id from our pre-computed map
+            el_id = el.get("id")
+            if el_id and getattr(self, "_jira_table_map", None) and el_id in self._jira_table_map:
+                jira_table = self._jira_table_map[el_id]
+                return self.process_tag(jira_table, parent_tags)
+
+            soup = BeautifulSoup(self.page.body_export, "html.parser")
+
+            # When a page has multiple jira macros, bind by macro-id first.
+            macro_id = el.get("data-macro-id")
+            if macro_id:
+                macro = soup.find(
+                    "div",
+                    {"data-macro-name": "jira", "data-macro-id": macro_id},
+                )
+                if macro:
+                    jira_table = macro.find("div", {"class": "jira-table"})
+                    if jira_table:
+                        return self.process_tag(jira_table, parent_tags)
+
+            jira_tables = soup.find_all("div", {"class": "jira-table"})
 
             if len(jira_tables) == 0:
                 logger.warning(
@@ -909,14 +948,17 @@ class Page(Document):
                 )
                 return text
 
-            if len(jira_tables) > 1:
-                logger.warning(
-                    "Multiple Jira tables are not supported. Ignoring. page_id=%s",
-                    self.page.id,
-                )
-                return text
+            # Fallback when macro-id is missing: consume tables in order of appearance.
+            if self._jira_table_cursor < len(jira_tables):
+                jira_table = jira_tables[self._jira_table_cursor]
+                self._jira_table_cursor += 1
+                return self.process_tag(jira_table, parent_tags)
 
-            return self.process_tag(jira_tables[0], parent_tags)
+            logger.warning(
+                "Could not map Jira table for macro instance. Ignoring. page_id=%s",
+                self.page.id,
+            )
+            return text
 
         def convert_toc(self, el: BeautifulSoup, text: str, parent_tags: list[str]) -> str:
             tocs = BeautifulSoup(self.page.body_export, "html.parser").find_all(

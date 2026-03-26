@@ -1,4 +1,4 @@
-"""Unit tests for markdown macro conversion."""
+"""Unit tests for markdown and macro conversion."""
 
 from unittest.mock import patch
 
@@ -305,3 +305,57 @@ GET /ficc/data/sod?ftDataType=FICC_MARGIN_PLAN_INT_PARAM
     result = converter.convert_markdown(view_el, "", [])
 
     assert "```http" in result
+
+
+def test_convert_jira_table_uses_current_macro_id_when_multiple_tables_exist() -> None:
+    """Resolve jira macro by current data-macro-id instead of global table count."""
+    page = _MockPage(editor2="")
+    page.body_export = """
+<div data-macro-name="jira" data-macro-id="jira-1">
+  <div class="jira-table"><table><tr><td>AAA-1</td></tr></table></div>
+</div>
+<div data-macro-name="jira" data-macro-id="jira-2">
+  <div class="jira-table"><table><tr><td>BBB-2</td></tr></table></div>
+</div>
+"""
+    converter = Page.Converter(page)
+    view_el = BeautifulSoup(
+        '<div data-macro-name="jira" data-macro-id="jira-2"></div>',
+        "html.parser",
+    ).find("div")
+
+    with (
+        patch.object(converter, "process_tag", return_value="MATCHED") as process_tag,
+        patch("confluence_markdown_exporter.confluence.logger.warning") as logger_warning,
+    ):
+        result = converter.convert_jira_table(view_el, "", [])
+
+    assert result == "MATCHED"
+    assert process_tag.call_count == 1
+    assert process_tag.call_args.args[0].get_text(strip=True) == "BBB-2"
+    logger_warning.assert_not_called()
+
+
+def test_convert_jira_table_consumes_tables_in_order_without_macro_id() -> None:
+    """Fallback to sequential mapping when macro-id is missing."""
+    page = _MockPage(editor2="")
+    page.body_export = """
+<div class="jira-table"><table><tr><td>AAA-1</td></tr></table></div>
+<div class="jira-table"><table><tr><td>BBB-2</td></tr></table></div>
+"""
+    converter = Page.Converter(page)
+    view_el = BeautifulSoup('<div data-macro-name="jira"></div>', "html.parser").find("div")
+
+    with (
+        patch.object(converter, "process_tag", side_effect=["FIRST", "SECOND"]) as process_tag,
+        patch("confluence_markdown_exporter.confluence.logger.warning") as logger_warning,
+    ):
+        first = converter.convert_jira_table(view_el, "", [])
+        second = converter.convert_jira_table(view_el, "", [])
+
+    assert first == "FIRST"
+    assert second == "SECOND"
+    assert process_tag.call_count == 2
+    assert process_tag.call_args_list[0].args[0].get_text(strip=True) == "AAA-1"
+    assert process_tag.call_args_list[1].args[0].get_text(strip=True) == "BBB-2"
+    logger_warning.assert_not_called()
