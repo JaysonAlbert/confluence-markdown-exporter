@@ -176,8 +176,27 @@ class Space(BaseModel):
             )
             return []
 
+        logger.info(
+            "Space '%s' (%s): loading homepage %s (body and attachment index)...",
+            self.name,
+            self.key,
+            self.homepage,
+        )
         homepage = Page.from_id(self.homepage)
-        return [homepage, *homepage.descendants]
+        logger.info(
+            "Space '%s' (%s): listing all pages under homepage via CQL (paginated)...",
+            self.name,
+            self.key,
+        )
+        descendants = homepage.descendants
+        logger.info(
+            "Space '%s' (%s): scope is %s page(s) (1 homepage + %s descendant(s)).",
+            self.name,
+            self.key,
+            len(descendants) + 1,
+            len(descendants),
+        )
+        return [homepage, *descendants]
 
     def export(self) -> None:
         export_pages(self.pages)
@@ -425,14 +444,27 @@ class Page(Document):
         results = []
 
         try:
-            response = confluence.get(url, params=params)
-            results.extend(response.get("results", []))
-            next_path = response.get("_links").get("next")
-
-            while next_path:
-                response = confluence.get(next_path)
-                results.extend(response.get("results", []))
+            with tqdm(
+                desc="Enumerate pages",
+                unit="page",
+                dynamic_ncols=True,
+                leave=True,
+                smoothing=0.05,
+            ) as pbar:
+                response = confluence.get(url, params=params)
+                batch = response.get("results", [])
+                results.extend(batch)
+                pbar.update(len(batch))
+                pbar.set_postfix_str(f"total={len(results)}")
                 next_path = response.get("_links").get("next")
+
+                while next_path:
+                    response = confluence.get(next_path)
+                    batch = response.get("results", [])
+                    results.extend(batch)
+                    pbar.update(len(batch))
+                    pbar.set_postfix_str(f"total={len(results)}")
+                    next_path = response.get("_links").get("next")
 
         except HTTPError as e:
             if e.response.status_code == 404:  # noqa: PLR2004
@@ -848,11 +880,17 @@ class Page(Document):
             )
 
             if len(jira_tables) == 0:
-                logger.warning("No Jira table found. Ignoring.")
+                logger.warning(
+                    "No Jira table found. Ignoring. page_id=%s",
+                    self.page.id,
+                )
                 return text
 
             if len(jira_tables) > 1:
-                logger.exception("Multiple Jira tables are not supported. Ignoring.")
+                logger.warning(
+                    "Multiple Jira tables are not supported. Ignoring. page_id=%s",
+                    self.page.id,
+                )
                 return text
 
             return self.process_tag(jira_tables[0], parent_tags)
@@ -863,11 +901,17 @@ class Page(Document):
             )
 
             if len(tocs) == 0:
-                logger.warning("Could not find TOC macro. Ignoring.")
+                logger.warning(
+                    "Could not find TOC macro. Ignoring. page_id=%s",
+                    self.page.id,
+                )
                 return text
 
             if len(tocs) > 1:
-                logger.exception("Multiple TOC macros are not supported. Ignoring.")
+                logger.warning(
+                    "Multiple TOC macros are not supported. Ignoring. page_id=%s",
+                    self.page.id,
+                )
                 return text
 
             return self.process_tag(tocs[0], parent_tags)
@@ -1232,7 +1276,11 @@ class Page(Document):
                     return "\n<!-- PlantUML diagram (no UML definition) -->\n\n"
 
             except json.JSONDecodeError:
-                logger.exception(f"Failed to parse PlantUML JSON for macro {macro_id}")
+                logger.exception(
+                    "Failed to parse PlantUML JSON for macro %s (page_id=%s)",
+                    macro_id,
+                    self.page.id,
+                )
                 return "\n<!-- PlantUML diagram (invalid JSON) -->\n\n"
             else:
                 # Return as a Markdown code block with plantuml syntax
@@ -1336,7 +1384,9 @@ class Page(Document):
 
             if not markdown_content:
                 logger.warning(
-                    f"Markdown macro ({macro_name}) found but no content could be extracted"
+                    "Markdown macro (%s) found but no content could be extracted (page_id=%s)",
+                    macro_name,
+                    self.page.id,
                 )
                 return f"\n<!-- Markdown macro ({macro_name}) content not found -->\n\n"
 
@@ -1425,8 +1475,17 @@ def fetch_deleted_page_ids(page_ids: list[str]) -> set[str]:
     batch_size = settings.export.existence_check_batch_size
     effective_batch_size = batch_size if use_v2 else min(batch_size, _CQL_MAX_BATCH_SIZE)
     existing: set[str] = set()
+    n_batches = (len(page_ids) + effective_batch_size - 1) // effective_batch_size
 
-    for i in range(0, len(page_ids), effective_batch_size):
+    for i in tqdm(
+        range(0, len(page_ids), effective_batch_size),
+        desc="Check removed pages",
+        unit="batch",
+        total=n_batches,
+        disable=n_batches <= 1,
+        leave=False,
+        dynamic_ncols=True,
+    ):
         batch = page_ids[i : i + effective_batch_size]
         try:
             if use_v2:
@@ -1462,7 +1521,21 @@ def sync_removed_pages() -> None:
         return
 
     unseen = LockfileManager.unseen_ids()
-    deleted = fetch_deleted_page_ids(sorted(unseen)) if unseen else set()
+    if unseen:
+        logger.info(
+            "Stale cleanup: verifying %d lockfile page(s) not seen in this run still exist...",
+            len(unseen),
+        )
+        deleted = fetch_deleted_page_ids(sorted(unseen))
+        if deleted:
+            logger.info(
+                "Stale cleanup: removing %d deleted page(s) from disk and lockfile.",
+                len(deleted),
+            )
+    else:
+        deleted = set()
+
+    # Always run: handles export_path moves for seen pages, and deletes when deleted is non-empty.
     LockfileManager.remove_pages(deleted)
 
 
@@ -1477,12 +1550,43 @@ def export_pages(pages: list["Page | Descendant"]) -> None:
     pages_to_export = [page for page in pages if LockfileManager.should_export(page)]
 
     if not pages_to_export:
-        logger.info("No pages to export based on lockfile state.")
+        if len(pages) == 0:
+            logger.info("No pages to export (empty scope).")
+        else:
+            logger.info(
+                "No pages to export: all %d page(s) skipped (unchanged per lockfile or missing output).",
+                len(pages),
+            )
         return
 
-    for page in (pbar := tqdm(pages_to_export, smoothing=0.05)):
-        pbar.set_postfix_str(f"Exporting page {page.id}")
-        _page = Page.from_id(page.id)
-        _page.export()
-        # Record to lockfile if enabled
-        LockfileManager.record_page(_page)
+    skipped = len(pages) - len(pages_to_export)
+    logger.info(
+        "Writing markdown for %d page(s) (%d in scope, %d skipped unchanged).",
+        len(pages_to_export),
+        len(pages),
+        skipped,
+    )
+
+    for page in (
+        pbar := tqdm(
+            pages_to_export,
+            desc="Export markdown",
+            unit="page",
+            smoothing=0.05,
+            dynamic_ncols=True,
+            leave=True,
+        )
+    ):
+        pbar.set_postfix_str(f"id={page.id}")
+        try:
+            _page = Page.from_id(page.id)
+            _page.export()
+            # Record to lockfile if enabled
+            LockfileManager.record_page(_page)
+        except Exception:
+            logger.exception(
+                "Export failed for Confluence page ID %s (title: %s).",
+                page.id,
+                getattr(page, "title", ""),
+            )
+            raise

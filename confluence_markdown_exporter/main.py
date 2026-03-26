@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 from typing import Annotated
@@ -9,6 +10,7 @@ from confluence_markdown_exporter.utils.app_data_store import get_settings
 from confluence_markdown_exporter.utils.app_data_store import set_setting
 from confluence_markdown_exporter.utils.config_interactive import main_config_menu_loop
 from confluence_markdown_exporter.utils.lockfile import LockfileManager
+from confluence_markdown_exporter.utils.logging_config import setup_export_logging
 from confluence_markdown_exporter.utils.measure_time import measure
 from confluence_markdown_exporter.utils.platform_compat import handle_powershell_tilde_expansion
 from confluence_markdown_exporter.utils.type_converter import str_to_bool
@@ -17,11 +19,30 @@ DEBUG: bool = str_to_bool(os.getenv("DEBUG", "False"))
 
 app = typer.Typer()
 
+_logger = logging.getLogger(__name__)
+
 
 def override_output_path_config(value: Path | None) -> None:
     """Override the default output path if provided."""
     if value is not None:
         set_setting("export.output_path", value)
+
+
+def _prepare_export_run(
+    output_path: Path | None,
+    log_file: Path | None,
+) -> Path:
+    """Apply output path override, attach file+stderr logging, return resolved log path."""
+    override_output_path_config(output_path)
+    settings = get_settings()
+    resolved_log = (
+        log_file
+        if log_file is not None
+        else (settings.export.output_path / "confluence-markdown-exporter.log")
+    )
+    setup_export_logging(resolved_log, debug=DEBUG)
+    _logger.info("Writing logs to %s", resolved_log)
+    return resolved_log
 
 
 @app.command(help="Export one or more Confluence pages by ID or URL to Markdown.")
@@ -33,17 +54,30 @@ def pages(
             help="Directory to write exported Markdown files to. Overrides config if set."
         ),
     ] = None,
+    log_file: Annotated[
+        Path | None,
+        typer.Option(help="Log file path. Default: <export.output_path>/confluence-markdown-exporter.log"),
+    ] = None,
 ) -> None:
     from confluence_markdown_exporter.confluence import Page
     from confluence_markdown_exporter.confluence import sync_removed_pages
 
     with measure(f"Export pages {', '.join(pages)}"):
-        override_output_path_config(output_path)
+        _prepare_export_run(output_path, log_file)
         LockfileManager.init()
         for page in pages:
-            _page = Page.from_id(int(page)) if page.isdigit() else Page.from_url(page)
-            _page.export()
-            LockfileManager.record_page(_page)
+            _page = None
+            try:
+                _page = Page.from_id(int(page)) if page.isdigit() else Page.from_url(page)
+                _page.export()
+                LockfileManager.record_page(_page)
+            except Exception:
+                ref = _page.id if _page is not None else page
+                _logger.exception(
+                    "Export failed (Confluence page id or argument: %s)",
+                    ref,
+                )
+                raise
         sync_removed_pages()
 
 
@@ -56,16 +90,29 @@ def pages_with_descendants(
             help="Directory to write exported Markdown files to. Overrides config if set."
         ),
     ] = None,
+    log_file: Annotated[
+        Path | None,
+        typer.Option(help="Log file path. Default: <export.output_path>/confluence-markdown-exporter.log"),
+    ] = None,
 ) -> None:
     from confluence_markdown_exporter.confluence import Page
     from confluence_markdown_exporter.confluence import sync_removed_pages
 
     with measure(f"Export pages {', '.join(pages)} with descendants"):
-        override_output_path_config(output_path)
+        _prepare_export_run(output_path, log_file)
         LockfileManager.init()
         for page in pages:
-            _page = Page.from_id(int(page)) if page.isdigit() else Page.from_url(page)
-            _page.export_with_descendants()
+            _page = None
+            try:
+                _page = Page.from_id(int(page)) if page.isdigit() else Page.from_url(page)
+                _page.export_with_descendants()
+            except Exception:
+                ref = _page.id if _page is not None else page
+                _logger.exception(
+                    "Export failed (Confluence page id or argument: %s)",
+                    ref,
+                )
+                raise
         sync_removed_pages()
 
 
@@ -78,6 +125,10 @@ def spaces(
             help="Directory to write exported Markdown files to. Overrides config if set."
         ),
     ] = None,
+    log_file: Annotated[
+        Path | None,
+        typer.Option(help="Log file path. Default: <export.output_path>/confluence-markdown-exporter.log"),
+    ] = None,
 ) -> None:
     from confluence_markdown_exporter.confluence import Space
     from confluence_markdown_exporter.confluence import sync_removed_pages
@@ -87,7 +138,7 @@ def spaces(
     normalized_space_keys = [handle_powershell_tilde_expansion(key) for key in space_keys]
 
     with measure(f"Export spaces {', '.join(normalized_space_keys)}"):
-        override_output_path_config(output_path)
+        _prepare_export_run(output_path, log_file)
         LockfileManager.init()
         for space_key in normalized_space_keys:
             space = Space.from_key(space_key)
@@ -103,12 +154,16 @@ def all_spaces(
             help="Directory to write exported Markdown files to. Overrides config if set."
         ),
     ] = None,
+    log_file: Annotated[
+        Path | None,
+        typer.Option(help="Log file path. Default: <export.output_path>/confluence-markdown-exporter.log"),
+    ] = None,
 ) -> None:
     from confluence_markdown_exporter.confluence import Organization
     from confluence_markdown_exporter.confluence import sync_removed_pages
 
     with measure("Export all spaces"):
-        override_output_path_config(output_path)
+        _prepare_export_run(output_path, log_file)
         LockfileManager.init()
         org = Organization.from_api()
         org.export()
