@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import json
-import logging
 import re
-
-logger = logging.getLogger(__name__)
 
 _MERMAID_KEYWORDS = {
     "graph",
@@ -171,14 +168,6 @@ def enrich_fenced_code_language(markdown_content: str, page_id: int) -> str:
 
         language = _guess_fence_language(code_content)
         if not language:
-            snippet = code_content.strip().splitlines()
-            snippet_preview = "\n".join(snippet[:5])
-            logger.warning(
-                "Unable to detect language for fenced code block in markdown macro "
-                "(page_id=%s). Snippet:\n%s",
-                page_id,
-                snippet_preview,
-            )
             return match.group(0)
         return f"{match.group(1)}```{language}\n{code_content}{match.group(4)}"
 
