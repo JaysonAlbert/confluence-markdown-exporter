@@ -65,6 +65,7 @@ def pages(
     with measure(f"Export pages {', '.join(pages)}"):
         _prepare_export_run(output_path, log_file)
         LockfileManager.init()
+        failed_refs: list[str] = []
         for page in pages:
             _page = None
             try:
@@ -73,11 +74,18 @@ def pages(
                 LockfileManager.record_page(_page)
             except Exception:
                 ref = _page.id if _page is not None else page
+                failed_refs.append(str(ref))
                 _logger.exception(
                     "Export failed (Confluence page id or argument: %s)",
                     ref,
                 )
-                raise
+                _logger.error("Continue after failed page export: %s", ref)
+        if failed_refs:
+            _logger.warning(
+                "Completed with export failures (%d): %s",
+                len(failed_refs),
+                ", ".join(failed_refs),
+            )
         sync_removed_pages()
 
 
@@ -101,6 +109,7 @@ def pages_with_descendants(
     with measure(f"Export pages {', '.join(pages)} with descendants"):
         _prepare_export_run(output_path, log_file)
         LockfileManager.init()
+        failed_refs: list[str] = []
         for page in pages:
             _page = None
             try:
@@ -108,11 +117,18 @@ def pages_with_descendants(
                 _page.export_with_descendants()
             except Exception:
                 ref = _page.id if _page is not None else page
+                failed_refs.append(str(ref))
                 _logger.exception(
                     "Export failed (Confluence page id or argument: %s)",
                     ref,
                 )
-                raise
+                _logger.error("Continue after failed page-with-descendants export: %s", ref)
+        if failed_refs:
+            _logger.warning(
+                "Completed with export failures (%d): %s",
+                len(failed_refs),
+                ", ".join(failed_refs),
+            )
         sync_removed_pages()
 
 
@@ -140,9 +156,22 @@ def spaces(
     with measure(f"Export spaces {', '.join(normalized_space_keys)}"):
         _prepare_export_run(output_path, log_file)
         LockfileManager.init()
+        failed_spaces: list[str] = []
         for space_key in normalized_space_keys:
-            space = Space.from_key(space_key)
-            space.export()
+            try:
+                space = Space.from_key(space_key)
+                space.export()
+            except Exception:
+                failed_spaces.append(space_key)
+                _logger.exception("Export failed for space: %s", space_key)
+                _logger.error("Continue after failed space export: %s", space_key)
+                continue
+        if failed_spaces:
+            _logger.warning(
+                "Completed with space export failures (%d): %s",
+                len(failed_spaces),
+                ", ".join(failed_spaces),
+            )
         sync_removed_pages()
 
 

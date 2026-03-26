@@ -43,6 +43,7 @@ from confluence_markdown_exporter.utils.export import sanitize_filename
 from confluence_markdown_exporter.utils.export import sanitize_key
 from confluence_markdown_exporter.utils.export import save_file
 from confluence_markdown_exporter.utils.lockfile import LockfileManager
+from confluence_markdown_exporter.utils.markdown_fence_language import enrich_fenced_code_language
 from confluence_markdown_exporter.utils.table_converter import TableConverter
 from confluence_markdown_exporter.utils.type_converter import str_to_bool
 
@@ -1427,6 +1428,7 @@ class Page(Document):
 
             # Return the markdown content directly (it's already in markdown format)
             # Add newlines for proper spacing
+            markdown_content = enrich_fenced_code_language(markdown_content, self.page.id)
             return f"\n{markdown_content}\n\n"
 
         def convert_table(self, el: BeautifulSoup, text: str, parent_tags: list[str]) -> str:
@@ -1579,6 +1581,7 @@ def export_pages(pages: list["Page | Descendant"]) -> None:
 
     Args:
         pages: List of pages to export.
+        Page-level failures are logged and export continues for remaining pages.
     """
     # Mark all pages as seen so cleanup skips API checks for unchanged pages
     LockfileManager.mark_seen([p.id for p in pages])
@@ -1602,6 +1605,7 @@ def export_pages(pages: list["Page | Descendant"]) -> None:
         skipped,
     )
 
+    failed_page_ids: list[int] = []
     for page in (
         pbar := tqdm(
             pages_to_export,
@@ -1624,4 +1628,17 @@ def export_pages(pages: list["Page | Descendant"]) -> None:
                 page.id,
                 getattr(page, "title", ""),
             )
-            raise
+            failed_page_ids.append(page.id)
+            logger.error(
+                "Page export failed and will continue. page_id=%s title=%s",
+                page.id,
+                getattr(page, "title", ""),
+            )
+            continue
+
+    if failed_page_ids:
+        logger.warning(
+            "Completed with page export failures (%d): %s",
+            len(failed_page_ids),
+            ", ".join(str(pid) for pid in failed_page_ids),
+        )
