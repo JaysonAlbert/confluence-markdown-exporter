@@ -3,6 +3,8 @@
 https://developer.atlassian.com/cloud/confluence/rest/v1/intro
 """
 
+from __future__ import annotations
+
 import functools
 import json
 import logging
@@ -235,6 +237,18 @@ class Document(BaseModel):
         }
 
 
+def _file_id_from_download_link(download_link: str) -> str:
+    """Parse fileId from attachment download URL query string when extensions omit fileId."""
+    if not download_link:
+        return ""
+    parsed = urllib.parse.urlparse(download_link)
+    qs = urllib.parse.parse_qs(parsed.query)
+    for key in ("fileId", "fileid"):
+        if key in qs and qs[key]:
+            return qs[key][0]
+    return ""
+
+
 class Attachment(Document):
     id: str
     file_size: int
@@ -255,8 +269,13 @@ class Attachment(Document):
         return mimetypes.guess_extension(self.media_type) or ""
 
     @property
+    def storage_file_id(self) -> str:
+        """Unique key for on-disk paths when Confluence omits extensions.fileId (avoids '.png' only)."""
+        return self.file_id if self.file_id else str(self.id)
+
+    @property
     def filename(self) -> str:
-        return f"{self.file_id}{self.extension}"
+        return f"{self.storage_file_id}{self.extension}"
 
     @property
     def _template_vars(self) -> dict[str, str]:
@@ -264,20 +283,21 @@ class Attachment(Document):
             **super()._template_vars,
             "attachment_id": str(self.id),
             "attachment_title": sanitize_filename(self.title),
-            # file_id is a GUID and does not need sanitized.
-            "attachment_file_id": self.file_id,
+            # file_id is a GUID and does not need sanitized; fall back to attachment id if missing.
+            "attachment_file_id": self.storage_file_id,
             "attachment_extension": self.extension,
         }
-
-    @property
-    def export_path(self) -> Path:
-        filepath_template = Template(settings.export.attachment_path.replace("{", "${"))
-        return Path(filepath_template.safe_substitute(self._template_vars))
 
     @classmethod
     def from_json(cls, data: JsonResponse) -> "Attachment":
         extensions = data.get("extensions", {})
         container = data.get("container", {})
+        download_link = data.get("_links", {}).get("download", "")
+        file_id = (
+            extensions.get("fileId", "")
+            or extensions.get("file_id", "")
+            or _file_id_from_download_link(download_link)
+        )
         return cls(
             id=data.get("id", ""),
             title=data.get("title", ""),
@@ -285,9 +305,9 @@ class Attachment(Document):
             file_size=extensions.get("fileSize", 0),
             media_type=extensions.get("mediaType", ""),
             media_type_description=extensions.get("mediaTypeDescription", ""),
-            file_id=extensions.get("fileId", ""),
+            file_id=file_id,
             collection_name=extensions.get("collectionName", ""),
-            download_link=data.get("_links", {}).get("download", ""),
+            download_link=download_link,
             comment=extensions.get("comment", ""),
             ancestors=[
                 *[Ancestor.from_json(ancestor) for ancestor in container.get("ancestors", [])],
@@ -321,8 +341,8 @@ class Attachment(Document):
 
         return attachments
 
-    def export(self) -> None:
-        filepath = settings.export.output_path / self.export_path
+    def export(self, page: Page | Descendant) -> None:
+        filepath = settings.export.output_path / attachment_export_path(self, page)
         if filepath.exists():
             return
 
@@ -496,23 +516,26 @@ class Page(Document):
     def export_attachments(self) -> None:
         if settings.export.attachment_export_all:
             for attachment in self.attachments:
-                attachment.export()
+                attachment.export(self)
         else:
             for attachment in self.attachments:
                 if (
                     attachment.filename.endswith(".drawio")
                     and f"diagramName={attachment.title}" in self.body
                 ):
-                    attachment.export()
+                    attachment.export(self)
                     continue
                 if (
                     attachment.filename.endswith(".drawio.png")
                     or attachment.filename.endswith(".drawio")
                 ) and attachment.title.replace(" ", "%20") in self.body_export:
-                    attachment.export()
+                    attachment.export(self)
                     continue
-                if attachment.file_id in self.body:
-                    attachment.export()
+                if attachment.file_id and attachment.file_id in self.body:
+                    attachment.export(self)
+                    continue
+                if not attachment.file_id and str(attachment.id) in self.body:
+                    attachment.export(self)
                     continue
 
     def get_attachment_by_id(self, attachment_id: str) -> Attachment | None:
@@ -792,7 +815,7 @@ class Page(Document):
 
             rows = [
                 {
-                    "file": f"[{att.title}]({_get_path(att.export_path)})",
+                    "file": f"[{att.title}]({_get_path(attachment_export_path(att, self.page))})",
                     "modified": f"{att.version.friendly_when} by {self.convert_user(att.version.by)}",  # noqa: E501
                 }
                 for att in self.page.attachments
@@ -974,7 +997,9 @@ class Page(Document):
                 href = el.get("href") or text
                 return f"[{text}]({href})"
 
-            path = self._get_path_for_href(attachment.export_path, settings.export.attachment_href)
+            path = self._get_path_for_href(
+                attachment_export_path(attachment, self.page), settings.export.attachment_href
+            )
             return f"[{attachment.title}]({path.replace(' ', '%20')})"
 
         def convert_time(self, el: BeautifulSoup, text: str, parent_tags: list[str]) -> str:
@@ -1039,7 +1064,9 @@ class Page(Document):
                     return f"![{text}]({url_src})"
                 return text
 
-            path = self._get_path_for_href(attachment.export_path, settings.export.attachment_href)
+            path = self._get_path_for_href(
+                attachment_export_path(attachment, self.page), settings.export.attachment_href
+            )
             el["src"] = path.replace(" ", "%20")
             if "_inline" in parent_tags:
                 parent_tags.remove("_inline")  # Always show images.
@@ -1117,7 +1144,9 @@ class Page(Document):
             if len(drawio_attachments) == 0:
                 return None
 
-            drawio_filepath = settings.export.output_path / drawio_attachments[0].export_path
+            drawio_filepath = settings.export.output_path / attachment_export_path(
+                drawio_attachments[0], self.page
+            )
             if not drawio_filepath.exists():
                 return None
 
@@ -1135,10 +1164,12 @@ class Page(Document):
                     return f"\n<!-- Drawio diagram `{drawio_name}` not found -->\n\n"
 
                 drawio_path = self._get_path_for_href(
-                    drawio_attachments[0].export_path, settings.export.attachment_href
+                    attachment_export_path(drawio_attachments[0], self.page),
+                    settings.export.attachment_href,
                 )
                 preview_path = self._get_path_for_href(
-                    preview_attachments[0].export_path, settings.export.attachment_href
+                    attachment_export_path(preview_attachments[0], self.page),
+                    settings.export.attachment_href,
                 )
 
                 drawio_image_embedding = f"![{drawio_name}]({preview_path.replace(' ', '%20')})"
@@ -1411,6 +1442,18 @@ def fetch_deleted_page_ids(page_ids: list[str]) -> set[str]:
             existing.update(batch)
 
     return set(page_ids) - existing
+
+
+def attachment_export_path(attachment: Attachment, page: Page | Descendant) -> Path:
+    """Resolve on-disk path for an attachment; includes page so paths can follow the page file."""
+    filepath_template = Template(settings.export.attachment_path.replace("{", "${"))
+    merged = {
+        **attachment._template_vars,
+        **page._template_vars,
+        "page_parent_path": page.export_path.parent.as_posix(),
+        "page_stem": page.export_path.stem,
+    }
+    return Path(filepath_template.safe_substitute(merged))
 
 
 def sync_removed_pages() -> None:

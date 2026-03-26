@@ -207,13 +207,21 @@ class ExportConfig(BaseModel):
             "  - {homepage_title}: The title of the homepage of the Confluence space.\n"
             "  - {ancestor_ids}: A slash-separated list of ancestor page IDs.\n"
             "  - {ancestor_titles}: A slash-separated list of ancestor page titles.\n"
+            "  - {page_id}: The page ID (same as in page_path).\n"
+            "  - {page_title}: The page title (same as in page_path).\n"
+            "  - {page_parent_path}: Directory containing the exported page .md file "
+            "(use in this template to place attachments next to the page).\n"
+            "  - {page_stem}: The page .md filename without extension.\n"
             "  - {attachment_id}: The unique ID of the attachment.\n"
             "  - {attachment_title}: The title of the attachment.\n"
             "  - {attachment_file_id}: The file ID of the attachment.\n"
             "  - {attachment_extension}: The file extension of the attachment,\n"
             "including the leading dot."
         ),
-        examples=["{space_name}/attachments/{attachment_file_id}{attachment_extension}"],
+        examples=[
+            "{space_name}/attachments/{attachment_file_id}{attachment_extension}",
+            "{page_parent_path}/{attachment_file_id}{attachment_extension}",
+        ],
     )
     attachment_export_all: bool = Field(
         default=False,
