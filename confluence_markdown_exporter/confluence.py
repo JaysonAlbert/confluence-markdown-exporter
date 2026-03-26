@@ -1361,7 +1361,7 @@ class Page(Document):
 
             return None
 
-        def _extract_markdown_from_editor2(self, macro_id: str) -> str | None:
+        def _extract_markdown_from_editor2(self, macro_id: str | None) -> str | None:
             """Extract markdown content from editor2 XML."""
             wrapped_editor2 = f"<root>{self.page.editor2}</root>"
             soup_editor2 = BeautifulSoup(wrapped_editor2, "xml")
@@ -1369,20 +1369,28 @@ class Page(Document):
             # BeautifulSoup strips namespace prefixes, so ac:structured-macro
             # becomes structured-macro
             markdown_macros = soup_editor2.find_all("structured-macro")
-            for macro in markdown_macros:
-                if (
-                    macro.get("name") in ("markdown", "mohamicorp-markdown")
-                    and macro.get("macro-id") == macro_id
-                ):
-                    # Try plain-text-body first
-                    plain_text_body = macro.find("plain-text-body")
-                    if plain_text_body:
-                        return plain_text_body.get_text(strip=True)
+            eligible_macros = [
+                macro
+                for macro in markdown_macros
+                if macro.get("name") in ("markdown", "mohamicorp-markdown")
+            ]
 
-                    # Try parameter for mohamicorp-markdown
-                    param = macro.find("parameter", {"name": "markdown"})
-                    if param:
-                        return param.get_text(strip=True)
+            target_macros = eligible_macros
+            if macro_id:
+                target_macros = [macro for macro in eligible_macros if macro.get("macro-id") == macro_id]
+            elif len(eligible_macros) != 1:
+                return None
+
+            for macro in target_macros:
+                # Try plain-text-body first
+                plain_text_body = macro.find("plain-text-body")
+                if plain_text_body:
+                    return plain_text_body.get_text(strip=True)
+
+                # Try parameter for mohamicorp-markdown
+                param = macro.find("parameter", {"name": "markdown"})
+                if param:
+                    return param.get_text(strip=True)
 
             return None
 
@@ -1401,8 +1409,13 @@ class Page(Document):
             # If not found, try editor2 XML (similar to plantuml)
             if not markdown_content:
                 macro_id = el.get("data-macro-id")
-                if macro_id:
-                    markdown_content = self._extract_markdown_from_editor2(macro_id)
+                markdown_content = self._extract_markdown_from_editor2(macro_id)
+
+            # Some Confluence pages return markdown macro as already-rendered HTML in view/export,
+            # while editor2 is empty and there is no macro-id. In this case `text` already
+            # contains converted child content from markdownify; use it as a safe fallback.
+            if not markdown_content and text.strip():
+                markdown_content = text.strip()
 
             if not markdown_content:
                 logger.warning(
