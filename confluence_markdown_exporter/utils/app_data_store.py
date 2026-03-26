@@ -263,6 +263,14 @@ class ExportConfig(BaseModel):
             "If enabled, the title will be added as a top-level heading."
         ),
     )
+    include_yaml_frontmatter: bool = Field(
+        default=False,
+        title="Include YAML Frontmatter",
+        description=(
+            "Whether to prepend YAML frontmatter (---) with confluence_page_id, "
+            "confluence_space_key, title, and optionally confluence_url when the instance URL is set."
+        ),
+    )
     skip_unchanged: bool = Field(
         default=True,
         title="Skip Unchanged Pages",

@@ -256,6 +256,25 @@ class Document(BaseModel):
         }
 
 
+def _page_yaml_frontmatter(page: "Page") -> str:
+    """YAML block prepended to exported markdown when include_yaml_frontmatter is enabled."""
+    fm: dict[str, object] = {
+        "confluence_page_id": page.id,
+        "confluence_space_key": page.space.key,
+        "title": page.title,
+    }
+    base = str(settings.auth.confluence.url).rstrip("/")
+    if base:
+        fm["confluence_url"] = f"{base}/wiki/spaces/{page.space.key}/pages/{page.id}"
+    dumped = yaml.safe_dump(
+        fm,
+        allow_unicode=True,
+        sort_keys=False,
+        default_flow_style=False,
+    )
+    return f"---\n{dumped}---\n\n"
+
+
 def _file_id_from_download_link(download_link: str) -> str:
     """Parse fileId from attachment download URL query string when extensions omit fileId."""
     if not download_link:
@@ -540,9 +559,12 @@ class Page(Document):
         )
 
     def export_markdown(self) -> None:
+        body = self.markdown
+        if settings.export.include_yaml_frontmatter:
+            body = _page_yaml_frontmatter(self) + body
         save_file(
             settings.export.output_path / self.export_path,
-            self.markdown,
+            body,
         )
 
     def export_attachments(self) -> None:

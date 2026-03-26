@@ -150,6 +150,7 @@ This will open a menu where you can:
 | export.filename_encoding              | Character mapping for filename encoding.                                                                              | Default mappings for forbidden characters.                          |
 | export.filename_length                | Maximum length of filenames.                                                                                          | 255                                                                 |
 | export.include_document_title         | Whether to include the document title in the exported markdown file.                                                  | True                                                                |
+| export.include_yaml_frontmatter       | Prepend YAML frontmatter with `confluence_page_id`, `confluence_space_key`, `title`, and `confluence_url` (if `auth.confluence.url` is set). | False                                                               |
 | export.skip_unchanged                 | Skip exporting pages that have not changed since last export. Uses a lockfile to track page versions.                 | True                                                                |
 | export.cleanup_stale                  | After export, delete local files for pages removed from Confluence or whose export path has changed.                  | True                                                                |
 | export.lockfile_name                  | Name of the lock file used to track exported pages.                                                                   | confluence-lock.json                                                |
@@ -171,6 +172,8 @@ This will open a menu where you can:
 | auth.jira.pat                         | Jira Personal Access Token                                                                                            | ""                                                                  |
 
 You can always view and change the current config with the interactive menu above.
+
+To embed the Confluence page id in exported paths (e.g. for search or AI context), add `{page_id}` to `export.page_path`. To also write page metadata as YAML at the top of each `.md` file, set `export.include_yaml_frontmatter` to `true`.
 
 ### Configuration for Target Systems
 
