@@ -1647,18 +1647,11 @@ def export_pages(pages: list["Page | Descendant"]) -> None:
         skipped,
     )
 
+    import concurrent.futures
+
     failed_page_ids: list[int] = []
-    for page in (
-        pbar := tqdm(
-            pages_to_export,
-            desc="Export markdown",
-            unit="page",
-            smoothing=0.05,
-            dynamic_ncols=True,
-            leave=True,
-        )
-    ):
-        pbar.set_postfix_str(f"id={page.id}")
+
+    def _export_single_page(page: "Page | Descendant") -> None:
         try:
             _page = Page.from_id(page.id)
             _page.export()
@@ -1676,7 +1669,36 @@ def export_pages(pages: list["Page | Descendant"]) -> None:
                 page.id,
                 getattr(page, "title", ""),
             )
-            continue
+
+    max_workers = settings.export.parallel_downloads
+
+    if max_workers > 1:
+        logger.info("Starting export with generic parallel degree: %d workers aligned", max_workers)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_export_single_page, page): page for page in pages_to_export}
+            for future in tqdm(
+                concurrent.futures.as_completed(futures),
+                total=len(futures),
+                desc="Export markdown",
+                unit="page",
+                smoothing=0.05,
+                dynamic_ncols=True,
+                leave=True,
+            ):
+                pass
+    else:
+        for page in (
+            pbar := tqdm(
+                pages_to_export,
+                desc="Export markdown",
+                unit="page",
+                smoothing=0.05,
+                dynamic_ncols=True,
+                leave=True,
+            )
+        ):
+            pbar.set_postfix_str(f"id={page.id}")
+            _export_single_page(page)
 
     if failed_page_ids:
         logger.warning(

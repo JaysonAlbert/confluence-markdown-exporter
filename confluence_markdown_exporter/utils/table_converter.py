@@ -63,11 +63,6 @@ def _normalize_table_cell_text(text: str) -> str:
         .removeprefix("<br/>")  # Remove leading <br/> that may be added by the first cell in a row
         .strip()
     )
-    if "**[ZYTGXT" in res:
-        print("====== DEBUG NORMALIZE ======")
-        print("Original:", repr(original_text))
-        print("Result:", repr(res))
-        print("=============================")
     return res
 
 
@@ -101,10 +96,6 @@ class TableConverter(MarkdownConverter):
             conv_row = []
             for c, cell in enumerate(row):
                 cell_str = str(cell)
-                if "ZYTGXT" in cell_str:
-                    print(f"====== DEBUG STR(CELL) r={r} c={c} ======")
-                    print(repr(cell_str))
-                    print("=========================================")
                 conv_row.append(self.convert(cell_str))
             converted.append(conv_row)
 
@@ -136,12 +127,7 @@ class TableConverter(MarkdownConverter):
                 if props:
                     lines.append("- " + "    ".join(props))
 
-            res = "<br/>" + "<br/>".join(lines) + "<br/>"
-            if "**[ZYTGXT" in res:
-                print("====== DEBUG INNER TABLE RESULT ======")
-                print(repr(res))
-                print("======================================")
-            return res
+            return "<br/>" + "<br/>".join(lines) + "<br/>"
 
         # Construct markdown table without padding. This prevents massive git diffs and 
         # large file sizes when a column contains very long content (like nested HTML tables),
@@ -150,10 +136,6 @@ class TableConverter(MarkdownConverter):
         lines.append("| " + " | ".join(headers) + " |")
         lines.append("|" + "|".join(["---"] * len(headers)) + "|")
         for row in body_rows:
-            if any("**[ZYTGXT" in cell for cell in row):
-                print("====== DEBUG OUTER ROW ======")
-                print("row:", row)
-                print("============================")
             lines.append("| " + " | ".join(row) + " |")
 
         return "\n" + "\n".join(lines) + "\n"

@@ -101,6 +101,8 @@ class ConfluenceLock(BaseModel):
         )
 
 
+import threading
+
 class LockfileManager:
     """Manager for lock file operations during export."""
 
@@ -109,6 +111,7 @@ class LockfileManager:
     _output_path: ClassVar[Path | None] = None
     _all_entries_snapshot: ClassVar[dict[str, PageEntry]] = {}
     _seen_page_ids: ClassVar[set[str]] = set()
+    _thread_lock: ClassVar[threading.Lock] = threading.Lock()
 
     @classmethod
     def init(cls) -> None:
@@ -131,9 +134,10 @@ class LockfileManager:
         if cls._lock is None or cls._lockfile_path is None:
             return
 
-        cls._lock.add_page(page)
-        cls._lock.save(cls._lockfile_path)
-        cls._seen_page_ids.add(str(page.id))
+        with cls._thread_lock:
+            cls._lock.add_page(page)
+            cls._lock.save(cls._lockfile_path)
+            cls._seen_page_ids.add(str(page.id))
 
     @classmethod
     def mark_seen(cls, page_ids: list[int]) -> None:

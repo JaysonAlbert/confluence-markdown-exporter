@@ -160,6 +160,11 @@ class ExportConfig(BaseModel):
             "`/path/to/export`: Output will be saved in the specified absolute path.",
         ],
     )
+    parallel_downloads: int = Field(
+        default=5,
+        title="Parallel Downloads",
+        description="Number of parallel workers for downloading and exporting pages.",
+    )
     page_href: Literal["absolute", "relative"] = Field(
         default="relative",
         title="Page Href Style",
