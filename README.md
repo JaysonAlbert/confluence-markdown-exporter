@@ -220,6 +220,109 @@ It generally was tested on:
 - Confluence Cloud 1000.0.0-b5426ab8524f (2025-05-28)
 - Confluence Server 8.5.20
 
+## Repository Scripts
+
+This repository also contains a few maintenance scripts under [`scripts/`](/Volumes/data/Projects/libra/confluence-markdown-exporter/scripts). They were added to support the Gliffy migration workflow after adding Gliffy export support to the main exporter.
+
+### Gliffy Maintenance Workflow
+
+The scripts solve three practical problems:
+
+- Find already-exported Markdown pages that still miss local Gliffy output.
+- Separate real Gliffy pages from false positives such as normal PNG screenshots.
+- Re-export only the affected pages instead of re-exporting a whole space.
+
+Recommended order:
+
+1. Scan the export tree and generate a candidate list.
+2. Verify the candidates against live Confluence page metadata.
+3. Re-export only the verified page IDs.
+
+### 1. Scan exported Markdown for affected pages
+
+Use `scripts/scan_gliffy_affected_pages.py` to inspect an existing export directory and find pages that still look incomplete.
+
+It currently flags pages when:
+
+- A page contains Gliffy source attachments but the exported local preview image is missing.
+- A page still references a remote `/download/attachments/...png` image and no local Gliffy export was found.
+- A page has Gliffy source attachments but not all of them are referenced from the exported Markdown.
+
+Example:
+
+```sh
+python3 scripts/scan_gliffy_affected_pages.py ./libra-confluence --output /tmp/gliffy-affected-pages.json
+```
+
+Output:
+
+- JSON summary written to `--output`
+- `affected_page_count`
+- `pages[]` with `page_id`, title, markdown path, attachment directory and detected reasons
+
+### 2. Verify which candidates are real Gliffy pages
+
+Use `scripts/verify_gliffy_candidates.py` to reduce false positives. The script loads each candidate page from Confluence and checks whether it really contains Gliffy-related metadata or markup.
+
+Typical checks include:
+
+- attachment comments containing `GLIFFY`
+- page body containing `gliffy-container`
+- export view containing Gliffy markup
+
+Example:
+
+```sh
+uv run python scripts/verify_gliffy_candidates.py /tmp/gliffy-affected-pages.json --output /tmp/gliffy-verified-pages.json
+```
+
+Output:
+
+- `verified_pages[]`: pages that really use Gliffy
+- `rejected_pages[]`: pages that matched the scan heuristics but are not Gliffy pages
+- summary counts for requested, verified and rejected pages
+
+### 3. Re-export only affected pages
+
+Use `scripts/reexport_gliffy_affected_pages.py` to batch re-export the affected pages back into an existing export root.
+
+This is useful when:
+
+- Gliffy support was added after an older export already existed
+- only a subset of pages needs to be repaired
+- you want a resumable, page-by-page re-export summary
+
+Example:
+
+```sh
+uv run python scripts/reexport_gliffy_affected_pages.py /tmp/gliffy-verified-pages.json --output-root ./libra-confluence
+```
+
+Useful options:
+
+- `--limit N`: smoke-test the first `N` pages before running the full batch
+- input can be either the raw scan output or the verified output
+
+Output:
+
+- JSON summary to stdout
+- per-page success/failure information
+- `requested_count`, `exported_count`, `failed_count`
+
+### Example end-to-end flow
+
+```sh
+python3 scripts/scan_gliffy_affected_pages.py ./libra-confluence --output /tmp/gliffy-affected-pages.json
+uv run python scripts/verify_gliffy_candidates.py /tmp/gliffy-affected-pages.json --output /tmp/gliffy-verified-pages.json
+uv run python scripts/reexport_gliffy_affected_pages.py /tmp/gliffy-verified-pages.json --output-root ./libra-confluence
+```
+
+### Notes
+
+- These scripts are repository maintenance helpers, not part of the published CLI.
+- `verify_gliffy_candidates.py` and `reexport_gliffy_affected_pages.py` require working Confluence credentials because they load live page data.
+- The scan script works against local exported files and the lockfile, so it can be run before touching Confluence again.
+
 ## Known Issues
 
 1. **Missing Attachment File ID on Server**: For some Confluence Server version/configuration the attachment file ID might not be provided (https://github.com/Spenhouet/confluence-markdown-exporter/issues/39). In the default configuration, this is used for the export path. Solution: Adjust the attachment path in the export config and use the `{attachment_id}` or `{attachment_title}` instead.

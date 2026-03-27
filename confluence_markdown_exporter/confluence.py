@@ -573,6 +573,11 @@ class Page(Document):
         )
 
     def export_attachments(self) -> None:
+        gliffy_diagram_titles = {
+            attachment.title
+            for attachment in self.attachments
+            if attachment.media_type == "application/gliffy+json"
+        }
         if settings.export.attachment_export_all:
             for attachment in self.attachments:
                 attachment.export(self)
@@ -596,6 +601,16 @@ class Page(Document):
                 ) and (
                     attachment.title.replace(" ", "%20") in self.body_export
                     or attachment.title.removesuffix(".png") in self.body_export
+                ):
+                    attachment.export(self)
+                    continue
+                if (
+                    attachment.media_type == "image/png"
+                    and attachment.title.removesuffix(".png") in gliffy_diagram_titles
+                    and (
+                        attachment.title.replace(" ", "%20") in self.body_export
+                        or attachment.title.removesuffix(".png") in self.body_export
+                    )
                 ):
                     attachment.export(self)
                     continue
