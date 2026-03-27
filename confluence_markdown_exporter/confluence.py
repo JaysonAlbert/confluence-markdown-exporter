@@ -304,6 +304,10 @@ class Attachment(Document):
             return ".drawio"
         if self.comment == "draw.io preview" and self.media_type == "image/png":
             return ".drawio.png"
+        if self.media_type == "application/gliffy+json":
+            return ".gliffy.json"
+        if self.media_type == "image/png" and "gliffy" in self.comment.lower():
+            return ".gliffy.png"
 
         return mimetypes.guess_extension(self.media_type) or ""
 
@@ -586,6 +590,15 @@ class Page(Document):
                 ) and attachment.title.replace(" ", "%20") in self.body_export:
                     attachment.export(self)
                     continue
+                if (
+                    attachment.filename.endswith(".gliffy.png")
+                    or attachment.filename.endswith(".gliffy.json")
+                ) and (
+                    attachment.title.replace(" ", "%20") in self.body_export
+                    or attachment.title.removesuffix(".png") in self.body_export
+                ):
+                    attachment.export(self)
+                    continue
                 if attachment.file_id and attachment.file_id in self.body:
                     attachment.export(self)
                     continue
@@ -825,6 +838,7 @@ class Page(Document):
                     "warning": self.convert_alert,
                     "details": self.convert_page_properties,
                     "drawio": self.convert_drawio,
+                    "gliffy": self.convert_gliffy,
                     "plantuml": self.convert_plantuml,
                     "scroll-ignore": self.convert_hidden_content,
                     "toc": self.convert_toc,
@@ -870,6 +884,9 @@ class Page(Document):
             if el.has_attr("data-macro-name"):
                 if el["data-macro-name"] == "jira":
                     return self.convert_jira_issue(el, text, parent_tags)
+
+            if "gliffy-container" in str(el.get("class", "")):
+                return self.convert_gliffy(el, text, parent_tags)
 
             return text
 
@@ -1261,6 +1278,90 @@ class Page(Document):
 
             # Extract mermaid diagram from DrawIO file
             return load_and_parse_drawio(str(drawio_filepath))
+
+        def _find_attachment_by_title_candidates(self, *titles: str) -> Attachment | None:
+            for title in titles:
+                if not title:
+                    continue
+                attachments = self.page.get_attachments_by_title(title)
+                if attachments:
+                    return attachments[0]
+            return None
+
+        def _gliffy_markdown(
+            self,
+            diagram_name: str,
+            source_attachment: Attachment | None,
+            preview_attachment: Attachment | None,
+            fallback_href: str | None = None,
+        ) -> str:
+            alt_text = diagram_name or "Gliffy diagram"
+
+            if preview_attachment:
+                preview_path = self._get_path_for_href(
+                    attachment_export_path(preview_attachment, self.page),
+                    settings.export.attachment_href,
+                )
+                image_markdown = f"![{alt_text}]({preview_path.replace(' ', '%20')})"
+
+                if source_attachment:
+                    source_path = self._get_path_for_href(
+                        attachment_export_path(source_attachment, self.page),
+                        settings.export.attachment_href,
+                    )
+                    return f"\n[{image_markdown}]({source_path.replace(' ', '%20')})\n\n"
+
+                return f"\n{image_markdown}\n\n"
+
+            if source_attachment:
+                source_path = self._get_path_for_href(
+                    attachment_export_path(source_attachment, self.page),
+                    settings.export.attachment_href,
+                )
+                return f"\n[{alt_text}]({source_path.replace(' ', '%20')})\n\n"
+
+            if fallback_href:
+                return f"\n![{alt_text}]({fallback_href})\n\n"
+
+            return f"\n<!-- Gliffy diagram `{alt_text}` not found -->\n\n"
+
+        def convert_gliffy(self, el: BeautifulSoup, text: str, parent_tags: list[str]) -> str:
+            diagram_name = ""
+            if match := re.search(r"\|diagramName=(.+?)\|", str(el)):
+                diagram_name = match.group(1)
+            elif el.get("data-filename"):
+                diagram_name = str(el.get("data-filename", ""))
+            elif image := el.find("img"):
+                image_src = str(image.get("src", ""))
+                diagram_name = unquote(urlparse(image_src).path.split("/")[-1]).removesuffix(".png")
+
+            preview_attachment = self._find_attachment_by_title_candidates(
+                f"{diagram_name}.png",
+                diagram_name,
+            )
+            source_attachment = self._find_attachment_by_title_candidates(
+                diagram_name,
+                f"{diagram_name}.gliffy",
+                f"{diagram_name}.gliffy.json",
+            )
+
+            if preview_attachment and not preview_attachment.media_type.startswith("image/"):
+                preview_attachment = None
+
+            if source_attachment and source_attachment.media_type == "image/png" and not preview_attachment:
+                preview_attachment = source_attachment
+                source_attachment = None
+
+            fallback_href = None
+            if image := el.find("img"):
+                fallback_href = str(image.get("src", "")) or None
+
+            return self._gliffy_markdown(
+                diagram_name=diagram_name,
+                source_attachment=source_attachment,
+                preview_attachment=preview_attachment,
+                fallback_href=fallback_href,
+            )
 
         def convert_drawio(self, el: BeautifulSoup, text: str, parent_tags: list[str]) -> str:
             if match := re.search(r"\|diagramName=(.+?)\|", str(el)):
