@@ -36,6 +36,8 @@ from tqdm import tqdm
 
 from confluence_markdown_exporter.api_clients import get_confluence_instance
 from confluence_markdown_exporter.api_clients import get_jira_instance
+from confluence_markdown_exporter.link_resolution import extract_page_id_and_fragment_from_href
+from confluence_markdown_exporter.link_resolution import normalize_confluence_anchor_fragment
 from confluence_markdown_exporter.utils.app_data_store import get_settings
 from confluence_markdown_exporter.utils.app_data_store import set_setting
 from confluence_markdown_exporter.utils.drawio_converter import load_and_parse_drawio
@@ -715,9 +717,9 @@ class Page(Document):
             confluence = get_confluence_instance()  # Refresh instance with new URL
 
         path = url.path.rstrip("/")
-        if match := re.search(r"/wiki/.+?/pages/(\d+)", path):
-            page_id = match.group(1)
-            return Page.from_id(int(page_id))
+        page_id, _ = extract_page_id_and_fragment_from_href(page_url)
+        if page_id:
+            return Page.from_id(page_id)
 
         if match := re.search(r"^/([^/]+?)/([^/]+)$", path):
             space_key = urllib.parse.unquote_plus(match.group(1))
@@ -1055,9 +1057,10 @@ class Page(Document):
             return f"[^{text}]"  # f"<sup>{text}</sup>"
 
         def convert_a(self, el: BeautifulSoup, text: str, parent_tags: list[str]) -> str:  # noqa: PLR0911, C901
+            href = str(el.get("href", ""))
             if "user-mention" in str(el.get("class")):
                 return self.convert_user_mention(el, text, parent_tags)
-            if "createpage.action" in str(el.get("href")) or "createlink" in str(el.get("class")):
+            if "createpage.action" in href or "createlink" in str(el.get("class")):
                 logger.warning(
                     f"Broken link detected: '{text}' on page '{self.page.title}' "
                     f"(ID: {self.page.id}). This is likely a Confluence bug. "
@@ -1086,21 +1089,22 @@ class Page(Document):
             if "page" in str(el.get("data-linked-resource-type")):
                 page_id = str(el.get("data-linked-resource-id", ""))
                 if page_id and page_id != "null":
-                    return self.convert_page_link(int(page_id))
+                    _, fragment = extract_page_id_and_fragment_from_href(href)
+                    return self.convert_page_link(int(page_id), fragment=fragment)
             if "attachment" in str(el.get("data-linked-resource-type")):
                 link = self.convert_attachment_link(el, text, parent_tags)
                 # convert_attachment_link may return None if the attachment meta is incomplete
                 return link or f"[{text}]({el.get('href')})"
-            if match := re.search(r"/wiki/.+?/pages/(\d+)", str(el.get("href", ""))):
-                page_id = match.group(1)
-                return self.convert_page_link(int(page_id))
-            if str(el.get("href", "")).startswith("#"):
+            page_id, fragment = extract_page_id_and_fragment_from_href(href)
+            if page_id:
+                return self.convert_page_link(page_id, fragment=fragment)
+            if href.startswith("#"):
                 # Handle heading links
                 return f"[{text}](#{sanitize_key(text, '-')})"
 
             return super().convert_a(el, text, parent_tags)
 
-        def convert_page_link(self, page_id: int) -> str:
+        def convert_page_link(self, page_id: int, fragment: str | None = None) -> str:
             if not page_id:
                 msg = "Page link does not have valid page_id."
                 raise ValueError(msg)
@@ -1115,8 +1119,14 @@ class Page(Document):
                 return f"[Page not accessible (ID: {page_id})]"
 
             page_path = self._get_path_for_href(page.export_path, settings.export.page_href)
+            anchor = normalize_confluence_anchor_fragment(
+                fragment,
+                page_title=page.title,
+                page_body_html=page.body_export,
+            )
+            suffix = f"#{anchor}" if anchor else ""
 
-            return f"[{page.title}]({page_path.replace(' ', '%20')})"
+            return f"[{page.title}]({page_path.replace(' ', '%20')}{suffix})"
 
         def convert_attachment_link(
             self, el: BeautifulSoup, text: str, parent_tags: list[str]
