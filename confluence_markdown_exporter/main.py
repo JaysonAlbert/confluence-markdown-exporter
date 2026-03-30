@@ -58,6 +58,13 @@ def pages(
         Path | None,
         typer.Option(help="Log file path. Default: <export.output_path>/confluence-markdown-exporter.log"),
     ] = None,
+    cleanup_stale: Annotated[
+        bool,
+        typer.Option(
+            "--cleanup-stale/--no-cleanup-stale",
+            help="Whether to check the lockfile for removed pages and delete stale local files.",
+        ),
+    ] = False,
 ) -> None:
     from confluence_markdown_exporter.confluence import Page
     from confluence_markdown_exporter.confluence import sync_removed_pages
@@ -86,7 +93,7 @@ def pages(
                 len(failed_refs),
                 ", ".join(failed_refs),
             )
-        sync_removed_pages()
+        sync_removed_pages(cleanup_stale=cleanup_stale)
 
 
 @app.command(help="Export Confluence pages and their descendant pages by ID or URL to Markdown.")
@@ -102,6 +109,13 @@ def pages_with_descendants(
         Path | None,
         typer.Option(help="Log file path. Default: <export.output_path>/confluence-markdown-exporter.log"),
     ] = None,
+    cleanup_stale: Annotated[
+        bool,
+        typer.Option(
+            "--cleanup-stale/--no-cleanup-stale",
+            help="Whether to check the lockfile for removed pages and delete stale local files.",
+        ),
+    ] = False,
 ) -> None:
     from confluence_markdown_exporter.confluence import Page
     from confluence_markdown_exporter.confluence import sync_removed_pages
@@ -129,7 +143,7 @@ def pages_with_descendants(
                 len(failed_refs),
                 ", ".join(failed_refs),
             )
-        sync_removed_pages()
+        sync_removed_pages(cleanup_stale=cleanup_stale)
 
 
 @app.command(help="Export all Confluence pages of one or more spaces to Markdown.")
@@ -145,6 +159,13 @@ def spaces(
         Path | None,
         typer.Option(help="Log file path. Default: <export.output_path>/confluence-markdown-exporter.log"),
     ] = None,
+    cleanup_stale: Annotated[
+        bool,
+        typer.Option(
+            "--cleanup-stale/--no-cleanup-stale",
+            help="Whether to check the lockfile for removed pages and delete stale local files.",
+        ),
+    ] = True,
 ) -> None:
     from confluence_markdown_exporter.confluence import Space
     from confluence_markdown_exporter.confluence import sync_removed_pages
@@ -172,7 +193,7 @@ def spaces(
                 len(failed_spaces),
                 ", ".join(failed_spaces),
             )
-        sync_removed_pages()
+        sync_removed_pages(cleanup_stale=cleanup_stale)
 
 
 @app.command(help="Export all Confluence pages across all spaces to Markdown.")
@@ -187,6 +208,13 @@ def all_spaces(
         Path | None,
         typer.Option(help="Log file path. Default: <export.output_path>/confluence-markdown-exporter.log"),
     ] = None,
+    cleanup_stale: Annotated[
+        bool,
+        typer.Option(
+            "--cleanup-stale/--no-cleanup-stale",
+            help="Whether to check the lockfile for removed pages and delete stale local files.",
+        ),
+    ] = True,
 ) -> None:
     from confluence_markdown_exporter.confluence import Organization
     from confluence_markdown_exporter.confluence import sync_removed_pages
@@ -196,7 +224,7 @@ def all_spaces(
         LockfileManager.init()
         org = Organization.from_api()
         org.export()
-        sync_removed_pages()
+        sync_removed_pages(cleanup_stale=cleanup_stale)
 
 
 @app.command(help="Open the interactive configuration menu or display current configuration.")

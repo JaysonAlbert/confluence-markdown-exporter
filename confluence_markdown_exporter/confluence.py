@@ -1720,9 +1720,12 @@ def attachment_export_path(attachment: Attachment, page: Page | Descendant) -> P
     return Path(filepath_template.safe_substitute(merged))
 
 
-def sync_removed_pages() -> None:
+def sync_removed_pages(*, cleanup_stale: bool | None = None) -> None:
     """Orchestrate stale-file cleanup: check API for deleted pages, then clean up."""
-    if not settings.export.cleanup_stale:
+    if cleanup_stale is None:
+        cleanup_stale = settings.export.cleanup_stale
+
+    if not cleanup_stale:
         return
 
     unseen = LockfileManager.unseen_ids()

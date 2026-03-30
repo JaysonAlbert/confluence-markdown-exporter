@@ -10,6 +10,8 @@ import typer
 from confluence_markdown_exporter.main import app
 from confluence_markdown_exporter.main import config
 from confluence_markdown_exporter.main import override_output_path_config
+from confluence_markdown_exporter.main import pages
+from confluence_markdown_exporter.main import spaces
 from confluence_markdown_exporter.main import version
 
 
@@ -109,3 +111,45 @@ class TestAppConfiguration:
         config("auth.confluence", show=False)
 
         mock_menu_loop.assert_called_once_with("auth.confluence")
+
+    @patch("confluence_markdown_exporter.main._prepare_export_run")
+    @patch("confluence_markdown_exporter.main.LockfileManager")
+    @patch("confluence_markdown_exporter.confluence.sync_removed_pages")
+    @patch("confluence_markdown_exporter.confluence.Page.from_id")
+    def test_pages_defaults_cleanup_stale_to_false(
+        self,
+        mock_from_id: MagicMock,
+        mock_sync_removed_pages: MagicMock,
+        mock_lockfile_manager: MagicMock,
+        mock_prepare_export_run: MagicMock,
+    ) -> None:
+        """Single-page export should not run stale cleanup unless explicitly requested."""
+        mock_from_id.return_value = MagicMock(id=123)
+
+        pages(["123"])
+
+        mock_prepare_export_run.assert_called_once()
+        mock_lockfile_manager.init.assert_called_once()
+        mock_sync_removed_pages.assert_called_once_with(cleanup_stale=False)
+
+    @patch("confluence_markdown_exporter.main._prepare_export_run")
+    @patch("confluence_markdown_exporter.main.LockfileManager")
+    @patch("confluence_markdown_exporter.confluence.sync_removed_pages")
+    @patch("confluence_markdown_exporter.confluence.Space.from_key")
+    def test_spaces_defaults_cleanup_stale_to_true(
+        self,
+        mock_from_key: MagicMock,
+        mock_sync_removed_pages: MagicMock,
+        mock_lockfile_manager: MagicMock,
+        mock_prepare_export_run: MagicMock,
+    ) -> None:
+        """Space export should keep stale cleanup enabled by default."""
+        mock_space = MagicMock()
+        mock_from_key.return_value = mock_space
+
+        spaces(["TEST"])
+
+        mock_prepare_export_run.assert_called_once()
+        mock_lockfile_manager.init.assert_called_once()
+        mock_space.export.assert_called_once()
+        mock_sync_removed_pages.assert_called_once_with(cleanup_stale=True)
