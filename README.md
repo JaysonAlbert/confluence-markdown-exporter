@@ -49,7 +49,7 @@ To use the confluence-markdown-exporter, follow these steps:
 Install python package via pip.
 
 ```sh
-pip install confluence-markdown-exporter
+pip install "git+https://github.com/JaysonAlbert/confluence-markdown-exporter.git"
 ```
 
 ### 2. Exporting
